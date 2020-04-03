@@ -195,7 +195,7 @@ class QArray:
 # -difference between middle of hole between pipes <20px -> +4 points
 # -otherwise -> -1 point
 # -dead -> -50 points
-
+#
 
     def __init__(self, q_states, q_actions):
         self.q_array = np.zeros((q_states, q_actions))
