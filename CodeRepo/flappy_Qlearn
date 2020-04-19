@@ -3,6 +3,9 @@ import os
 import random
 import numpy as np
 import matplotlib.pyplot as plt
+import time
+from collections import namedtuple
+
 
 pygame.font.init()
 
@@ -17,7 +20,12 @@ BASE_IMG = pygame.transform.scale2x(pygame.image.load(os.path.join(PROJECT_PATH,
 BG_IMG = pygame.transform.scale2x(pygame.image.load(os.path.join(PROJECT_PATH, "media", "img", "bg.png")))
 WIN_WIDTH = 500
 WIN_HEIGHT = 800
-POPULATION_SIZE = 21
+POPULATION_SIZE = 1
+FPS = 5
+NO_JUMP = 0
+JUMP = 1
+
+State = namedtuple('State', 'y_dif, vel, x_dist')
 
 STAT_FONT = pygame.font.SysFont("comicsans", 50)
 
@@ -27,46 +35,66 @@ class Bird:
     MAX_ROTATION = 25
     ROT_VEL = 20
     ANIMATION_TIME = 5
+    Y_DIF = 0
+    VEL = 1
+    X_DIST = 2
 
     def __init__(self, x, y):
-        self.x  = x
-        self.y = y
-        self.y_dif = 0
-        self.d = 0
-        self.y_prev_dif = 0
+        self._reward = 0
+        self._y_dif = 0
+        self._y_prev_dif = 0
         self.last_action = 0
         self.tilt = 0
         self.tick_count = 0
         self.vel = 0
-        self.height = self.y
         self.img_count = 0
+        self.frames_alive = 0
+        self.d = 0
+        self.x = x
+        self.y = y
+        self.height = self.y
         self.img = self.IMGS[0]
-        self.reward = 0
+        self.curr_state = [0, 0, 0]
+        self.prev_state = [0, 0, 0]
 
-    def set_last_action(self, last_action):
-        self.last_action = last_action
+    def update_last_action(self):
+        if self.d < 0:
+            self.last_action = 1
+        else:
+            self.last_action = 0
 
     def get_last_action(self):
         return self.last_action
 
-    def set_y_dif(self, y_dif):
-        self.y_prev_dif = self.y_dif
-        self.y_dif = y_dif
+    @property
+    def y_dif(self):
+        return self._y_dif
 
-    def get_y_dif(self):
-        return self.y_dif
+    @y_dif.setter
+    def y_dif(self, y_dif):
+        self._y_prev_dif = self._y_dif
+        self._y_dif = y_dif
 
-    def set_y_prev_dif(self, y_prev_dif):
-        self.y_prev_dif = y_prev_dif
+    @property
+    def y_prev_dif(self):
+        return self._y_prev_dif
 
-    def get_y_prev_dif(self):
-        return self.y_prev_dif
+    @y_prev_dif.setter
+    def y_prev_dif(self, y_prev_dif):
+        self._y_prev_dif = y_prev_dif
 
-    def get_reward(self):
-        return self.reward
+    @property
+    def reward(self):
+        return self._reward
 
-    def add_reward(self, reward):
-        self.reward = reward
+    @reward.setter
+    def reward(self, reward):
+        self._reward = reward
+
+    def add_reward(self, addition):
+        self.reward = self.reward + addition
+
+
 
     def jump(self):
         self.vel = -10.5
@@ -114,6 +142,21 @@ class Bird:
         rotated_image = pygame.transform.rotate(self.img, self.tilt)
         new_rect = rotated_image.get_rect(center=self.img.get_rect(topleft = (self.x, self.y)).center)
         win.blit(rotated_image, new_rect.topleft)
+
+    def collided(self, pipes):
+        for pipe in pipes:
+            if pipe.collide(self):
+                return True
+        return False
+
+    def out_of_screen(self):
+        return self.y + self.img.get_height() >= 730 or self.y < 0
+
+    def middle_pipe_passed(self,pipes):
+        pipe_i = 1 if len(pipes) > 1 else 0
+        if pipes[pipe_i].x < self.x:
+            return True
+        return False
 
     def get_mask(self):
         return pygame.mask.from_surface(self.img)
@@ -190,13 +233,6 @@ class Base:
 
 class QArray:
 
-#Rewards:
-# -stay alive for next frame -> +2 point
-# -difference between middle of hole between pipes <20px -> +4 points
-# -otherwise -> -1 point
-# -dead -> -50 points
-#
-
     def __init__(self, q_states, q_actions):
         self.q_array = np.zeros((q_states, q_actions))
         self.l_rate = 0.01
@@ -219,12 +255,58 @@ class QArray:
         data0 = self.q_array[:, 0]
         data1 = self.q_array[:, 1]
 
-        plt.plot(range(-800,800),data0, label = "Data 0", color = 'red')
-        plt.plot(range(-800,800),data1, label = "Data 1", color = 'blue')
+        #plt.plot(range(-800,800),data0, label = "Data 0", color = 'red')
+        #plt.plot(range(-800,800),data1, label = "Data 1", color = 'blue')
 
-
+        self.fig = plt.figure()
+        ax = self.fig.add_subplot(111)
+        self.li, = ax.plot(range(-800,800), data1-data0, color = 'red')
+        #self.li2, = ax.plot(range(-800, 800), data1)
+        ax.relim()
+        ax.autoscale_view(True, True, True)
+        plt.ylim(-20, 20)
+        self.fig.canvas.draw()
+        plt.show(block=False)
+        plt.pause(0.001)
         #plt.plot(self.q_array[:,1]-self.q_array[:,0])
-        plt.show()
+        #plt.show()
+
+    def update_plot(self):
+        #xmin, xmax = plt.xlim()
+        #ymin, ymax = plt.ylim()
+        #plt.xlim(xmin , xmax)
+        #plt.ylim(ymin , ymax+2)
+        self.li.set_ydata(self.q_array[:, 1]-self.q_array[:, 0])
+        #self.li2.set_ydata(self.q_array[:, 1])
+        self.fig.canvas.draw()
+        time.sleep(0.01)
+
+
+class QDictTuple:
+    #State indexes -> y_dif, vel, x_dist
+
+    def __init__(self):
+        state_ini = State(y_dif=0, vel=0, x_dist=0)
+        q_val_ini = [0, 0]
+        self.q_dict = {state_ini: q_val_ini}
+        self.l_rate = 0.01
+
+    def should_jump(self, q_state):
+        if self.q_dict[q_state][NO_JUMP] >= self.q_dict[q_state][JUMP]:
+            return False
+        return True
+
+    #aka highest expected future reward, means max q value in given state, needed for new Q calculation
+    def get_max_q(self, q_state):
+        return max(self.q_dict[q_state][NO_JUMP], self.q_dict[q_state][JUMP])
+
+
+
+    def update_q(self, q_state, q_action, next_q_state, reward, epsilon):
+        if q_state not in self.q_dict:
+            self.q_dict[q_state][q_action] = [0, 0]
+        self.q_dict[q_state][q_action] += self.l_rate * (reward + epsilon * self.get_max_q(next_q_state) - self.q_dict[q_state][q_action])
+
 
 
 def draw_window(win, birds, pipes, base, score):
@@ -243,24 +325,17 @@ def draw_window(win, birds, pipes, base, score):
 
 
 def main():
-
-
     # States - difference between curr pos and bottom pipe, height = 800 by default, need + and - values so 1600 rows
     # Actions - Idle/Jump
     #q_array values are "quality" of each action in current state
-
-
     q_array = QArray(2 * WIN_HEIGHT, 2)
+    #q_dict = QDictTuple()
 
     birds = []
     pipes = []
     frame_counter = 0
-    score = 0
     prev_act = 0
     prev_dif = 0
-    reset_game = False
-    create_new_bird = False
-    create_new_pipe = False
     run = True
     epsilon = 0.7
 
@@ -268,13 +343,11 @@ def main():
     win = pygame.display.set_mode((WIN_WIDTH, WIN_HEIGHT))
     clock = pygame.time.Clock()
 
-    #birds.append(Bird(230, pipes[0].bottom-130))
-
     while run:
-        exploration = False
-
         pipe_ind = 0
-        clock.tick(30)
+        clock.tick(FPS)
+        exploration = random.randrange(0, 100)/100 < epsilon
+        reset_game = len(birds) == 0
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -285,107 +358,60 @@ def main():
                 if event.key == pygame.K_LEFT:
                     q_array.plot()
 
-        if random.randrange(0, 100)/100 < epsilon:
-            exploration = True
-
-        #if frame_counter%45 == 0:
-            #create_new_bird = True
-        if frame_counter == 0:
-            create_new_bird = True
-        #if frame_counter%60 == 0 or frame_counter == 0:
-            #create_new_pipe = False
-        #else:
-            #create_new_pipe = False
-
-
-        if len(birds) == 0:
-            reset_game = False
-            create_new_pipe = True
-            rem = []
+        if reset_game:
             pipes = []
-            pipe_ind = 0
-            #pipes = [Pipe(700)]
-
-        if create_new_pipe:
             pipes.append(Pipe(500))
-            create_new_pipe = False
-
-        if create_new_bird:
             for i in range(POPULATION_SIZE):
-                birds.append(Bird(230 - i*10, 300))#pipes[pipe_ind].bottom-130))
-            create_new_bird = False
+                birds.append(Bird(230 - i*10, 300))
 
-        for x,bird in enumerate(birds):
-            if bird.y + bird.img.get_height() >= 730 or bird.y < 0:
-                bird.add_reward(-600)
-                l_act = 0
-                if bird.d < 0:
-                    l_act = 1
-                q_array.update_q(bird.get_y_prev_dif(), l_act, bird.get_y_dif(), bird.get_reward(),
-                                 epsilon)
-                birds.pop(x)
-
-        if len(birds) > 0:
-            if len(pipes) > 1 and birds[0].x > pipes[0].x + pipes[0].PIPE_TOP.get_width():
-                pipe_ind = 1
-        else:
-            #reset_game = True
-            create_new_bird = True
-            create_new_pipe = True
-            for pipe in pipes:
-                rem.append(pipe)
-
-
-        for pipe in pipes:
-            for x, bird in enumerate(birds):
-                if pipe.collide(bird):
-                    bird.add_reward(-100)
-                    l_act = 0
-                    if bird.d < 0:
-                        l_act = 1
-                    q_array.update_q(bird.get_y_prev_dif(), bird.get_last_action(), bird.get_y_dif(), bird.get_reward(),
-                                     epsilon)
-                    birds.pop(x)
-                if not pipe.passed and not create_new_pipe and pipe.x < bird.x:
-                    pipe.passed = True
-                    create_new_pipe = True
-                    score += 1
+        for x, pipe in enumerate(pipes):
             if pipe.x + pipe.PIPE_TOP.get_width() < 0:
-                rem.append(pipe)
+                pipes.pop(x)
             pipe.move()
 
         for x, bird in enumerate(birds):
-            bird.move()
-            y_dif = round(pipes[pipe_ind].bottom-50 - bird.y)
-            bird.set_y_dif(y_dif)
-            bird.add_reward(50-round(abs(y_dif/10)))
-            #if y_dif < 20 and y_dif>0:
-                #bird.add_reward(20)
-            #else:
-                #bird.add_reward(-20)
-            if (not exploration and q_array.should_jump(y_dif)) or (exploration and random.choice([True,False,False,False,False, False, False, False])):
-                bird.jump()
-                bird.set_last_action(1)
-            else:
-                bird.set_last_action(0)
-            if frame_counter > 30:
-                l_act = 0
-                if bird.d < 0:
-                    l_act = 1
-                q_array.update_q(bird.get_y_prev_dif(), bird.get_last_action(), bird.get_y_dif(), bird.get_reward(),
-                             epsilon)
+            bird.frames_alive += 1
+            if bird.collided(pipes):
+                birds.pop(x)
+                bird.add_reward(-20)
+            elif bird.out_of_screen():
+                birds.pop(x)
+                bird.add_reward(-20)
 
-        for r in rem:
-            if(pipes.count(r)):
-                pipes.remove(r)
-        #if frame_counter%3000 == 0:
-            #q_array.plot()
-        #q_array.update_q(bird.get_y_prev_dif(), bird.get_last_action(), bird.get_y_dif(), bird.get_reward(), epsilon)
+            if bird.middle_pipe_passed(pipes) and len(pipes) < 3:
+                pipes.append(Pipe(500))
+            if len(pipes) > 1 and bird.x > pipes[0].x + pipes[0].PIPE_TOP.get_width():
+                pipe_ind = 1
+
+            y_dif = round(pipes[pipe_ind].bottom-50 - bird.y)
+            bird.y_dif = y_dif
+            #reward range 0-10 from y difference
+            #additional value added for each frame when bird is alive
+            bird.reward = -round(abs(y_dif/80))
+            #bird.add_reward(bird.frames_alive/10)
+
+            if exploration:
+                if q_array.should_jump(y_dif):
+                    bird.jump()
+            else:
+                if random.choice([True,False,False,False,False, False, False, False]):
+                    bird.jump()
+            bird.update_last_action()
+            bird.move()
+
+            if frame_counter > 30:
+                q_array.update_q(bird.y_prev_dif, bird.get_last_action(), bird.y_dif, bird.reward, epsilon)
+
+        if frame_counter == 61:
+            q_array.plot()
+        if frame_counter > 61 and frame_counter%10 == 0:
+            q_array.update_plot()
+
         prev_dif = y_dif
-        score = pipe_ind
+        number_to_show = bird.d
         base.move()
         epsilon = epsilon - 0.0001
         frame_counter += 1
-        draw_window(win, birds, pipes, base, score)
+        draw_window(win, birds, pipes, base, number_to_show)
 
 main()
